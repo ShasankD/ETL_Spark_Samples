@@ -1,0 +1,40 @@
+import pytest
+from pyspark.sql import SparkSession
+from pyspark.sql import Row
+from pyspark.sql.functions import col
+
+@pytest.fixture(scope="session")
+def spark():
+    spark = SparkSession.builder \
+        .appName("PytestETL") \
+        .master("local[*]") \
+        .getOrCreate()
+    yield spark
+    spark.stop()
+
+def test_parquet_etl(tmp_path, spark):
+    #  Create input parquet
+    input_path = tmp_path / "input.parquet"
+    data = [
+        Row(id=1, name="Alice", age=30, salary=40000),
+        Row(id=2, name="Bob", age=40, salary=120000),
+        Row(id=3, name="Charlie", age=22, salary=30000),
+    ]
+    df = spark.createDataFrame(data)
+    df.write.mode("overwrite").parquet(str(input_path))
+
+    # Run transformation
+    df_in = spark.read.parquet(str(input_path))
+    df_transformed = (
+        df_in.filter(col("age") > 25)
+             .withColumn("salary_band",
+                         (col("salary") < 50000).cast("int"))
+    )
+
+    # Assert to Check row counts and schema
+    assert df_transformed.count() == 2
+    assert "salary_band" in df_transformed.columns
+
+    result = {row["name"]: row["salary_band"] for row in df_transformed.collect()}
+    assert result["Alice"] == 1
+    assert result["Bob"] == 0
