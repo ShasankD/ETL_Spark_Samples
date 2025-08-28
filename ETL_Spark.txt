@@ -1,0 +1,34 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, when
+
+# Initialize SparkSession
+spark = SparkSession.builder \
+    .appName("ParquetETLExample") \
+    .getOrCreate()
+
+# Extract: Read parquet files
+
+input_path = "s3://your-bucket/input_data/*.parquet" 
+df = spark.read.parquet(input_path)
+
+# Transform: Apply transformations
+
+df_transformed = (
+    df.select("id", "name", "age", "salary")
+      .filter(col("age") > 25)  # keep only age > 25
+      .withColumn("salary_band",
+                  when(col("salary") < 50000, "Low")
+                  .when((col("salary") >= 50000) & (col("salary") < 100000), "Medium")
+                  .otherwise("High"))
+)
+
+
+# Load: Write parquet output
+
+output_path = "s3://your-bucket/output_data/"
+
+df_transformed.write \
+    .mode("overwrite") \  # overwrite, append, ignore, errorifexists
+    .parquet(output_path)
+
+spark.stop()
