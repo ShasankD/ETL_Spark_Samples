@@ -1,0 +1,46 @@
+from pyspark.sql import SparkSession
+
+# Initialize SparkSession with Snowflake connector
+spark = (
+    SparkSession.builder
+    .appName("ORC-to-Snowflake")
+    .config("spark.jars.packages", 
+            "net.snowflake:snowflake-jdbc:3.13.14,"
+            "net.snowflake:spark-snowflake_2.12:2.11.1-spark_3.1")  # version may vary
+    .getOrCreate()
+)
+
+# Replace with your ORC file path
+orc_file_path = "s3a://my-bucket/large_data.orc"  # or "abfss://..." for Azure Data Lake
+
+#  Read ORC file into DataFrame
+df = spark.read.format("orc").load(orc_file_path)
+
+print("Schema of ORC file:")
+df.printSchema()
+
+# Replace with your Snowflake connection details
+sf_options = {
+    "sfURL": "myaccount.snowflakecomputing.com",
+    "sfDatabase": "MY_DATABASE",
+    "sfSchema": "PUBLIC",
+    "sfWarehouse": "MY_WH",
+    "sfRole": "SYSADMIN",
+    "sfUser": "my_user",
+    "sfPassword": "my_password"
+}
+
+# Target table in Snowflake
+target_table = "MY_ORC_TABLE"
+
+# Write DataFrame to Snowflake
+(
+    df.write
+    .format("snowflake")
+    .options(**sf_options)
+    .option("dbtable", target_table)
+    .mode("overwrite")   # or "append"
+    .save()
+)
+
+print(f"Data successfully loaded into Snowflake table: {target_table}")
