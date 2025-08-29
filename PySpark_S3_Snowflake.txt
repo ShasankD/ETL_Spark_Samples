@@ -1,0 +1,71 @@
+from pyspark.sql import SparkSession
+import snowflake.connector
+
+
+# Initialize Spark
+
+spark = (
+    SparkSession.builder
+    .appName("ORC-to-Snowflake-Staged")
+    .getOrCreate()
+)
+
+# Read ORC file into DataFrame
+orc_file_path = "s3a://my-bucket/large_data.orc"
+df = spark.read.format("orc").load(orc_file_path)
+
+
+# Write to S3 in Parquet
+
+staging_path = "s3a://my-bucket/snowflake_stage/output/"
+
+(
+    df.write
+    .mode("overwrite")
+    .format("parquet")  # or "csv" if needed
+    .save(staging_path)
+)
+
+print("Data written to S3 staging path:", staging_path)
+
+
+# Connect to Snowflake
+
+conn = snowflake.connector.connect(
+    user="MY_USER",
+    password="MY_PASSWORD",
+    account="myaccount.snowflakecomputing.com",
+    warehouse="MY_WH",
+    database="MY_DATABASE",
+    schema="PUBLIC",
+    role="SYSADMIN"
+)
+cur = conn.cursor()
+
+
+# Create stage in Snowflake (if not exists)
+
+stage_name = "MY_EXT_STAGE"
+
+cur.execute(f"""
+    CREATE STAGE IF NOT EXISTS {stage_name}
+    URL='s3://my-bucket/snowflake_stage/output/'
+    STORAGE_INTEGRATION = my_s3_integration
+""")
+
+
+# COPY INTO Snowflake table
+
+target_table = "MY_ORC_TABLE"
+
+cur.execute(f"""
+    COPY INTO {target_table}
+    FROM @{stage_name}
+    FILE_FORMAT = (TYPE = PARQUET)
+    PATTERN = '.*[.]parquet'
+""")
+
+print(f"Data successfully loaded into Snowflake table: {target_table}")
+
+cur.close()
+conn.close()
