@@ -1,0 +1,77 @@
+from airflow import DAG
+from airflow.providers.databricks.operators.databricks import DatabricksSubmitRunOperator
+from airflow.providers.snowflake.operators.snowflake import SnowflakeOperator
+from airflow.operators.python import PythonOperator
+from datetime import datetime, timedelta
+import subprocess
+
+default_args = {
+    'owner': 'data_eng_team',
+    'depends_on_past': False,
+    'email_on_failure': True,
+    'retries': 2,
+    'retry_delay': timedelta(minutes=10)
+}
+
+dag = DAG(
+    'teradata_to_snowflake_nightly',
+    default_args=default_args,
+    description='Nightly ETL: Teradata -> Parquet -> S3 -> Databricks -> Snowflake',
+    schedule_interval='0 2 * * *',  # every night at 2 AM
+    start_date=datetime(2023, 1, 1),
+    catchup=False
+)
+
+
+# Extract from Teradata → S3
+
+def run_pyspark_extract():
+    subprocess.run([
+        "spark-submit",
+        "--jars", "teradata-jdbc-driver.jar",
+        "/opt/airflow/dags/scripts/extract_teradata_to_s3.py"
+    ], check=True)
+
+extract_task = PythonOperator(
+    task_id="extract_teradata_to_s3",
+    python_callable=run_pyspark_extract,
+    dag=dag
+)
+
+
+# Run Databricks Transformation
+
+databricks_task = DatabricksSubmitRunOperator(
+    task_id='databricks_transform',
+    databricks_conn_id='databricks_default',
+    json={
+        'new_cluster': {
+            'spark_version': '11.3.x-scala2.12',
+            'node_type_id': 'i3.xlarge',
+            'num_workers': 4
+        },
+        'spark_python_task': {
+            'python_file': 'dbfs:/jobs/transform_s3_to_stage.py',
+        }
+    },
+    dag=dag
+)
+
+
+# Load into Snowflake
+
+snowflake_task = SnowflakeOperator(
+    task_id='load_into_snowflake',
+    sql="""
+        COPY INTO MY_DB.PUBLIC.big_table_snowflake
+        FROM @teradata_stage
+        FILE_FORMAT = (TYPE = PARQUET)
+        PATTERN = '.*[.]parquet'
+        ON_ERROR = 'CONTINUE';
+    """,
+    snowflake_conn_id='snowflake_default',
+    dag=dag
+)
+
+# Define pipeline order
+extract_task >> databricks_task >> snowflake_task
